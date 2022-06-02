@@ -32,13 +32,13 @@ class RefPanel(object):
         haplotype = haplotype[:, np.all((haplotype == 0) | (haplotype == 1), axis=0)]
         nsnp_block = haplotype.shape[1]
 
-        print()
+        print(flush=True)
         if n_snp is None:
             n_snp = nsnp_block
         elif nsnp_block < n_snp:
             raise Exception(f'Only {nsnp_block} valid SNPs in partition {partition_idx}. Skip the partition.')
 
-        logging.info(f'{nsnp_block} valid SNPs in partition {partition_idx}, use {n_snp} SNPs as ref panel.')
+        logging.info(f'{nsnp_block} valid SNPs in partition {partition_idx}, use {int(n_snp)} SNPs as ref panel.')
         start = (nsnp_block - n_snp) / 2
         return haplotype[:, int(start):int(nsnp_block - start)]
 
@@ -50,7 +50,7 @@ class Simulation(object):
         if n_ld_panel is None:
             gt_ld_panel = self.gt_gwas[:, 0]
         else:
-            gt_ld_panel = self.simulate_allelecount_gt(gt_ref, n_ld_panel)[:, 0]
+            gt_ld_panel = self.simulate_allelecount_gt(gt_ref, int(n_ld_panel))[:, 0]
 
         self.ld = np.corrcoef(gt_ld_panel, rowvar=False)
         self.gt_ld_panel = gt_ld_panel
@@ -93,8 +93,6 @@ class Simulation(object):
         beta = np.zeros(self.gt_ld_panel.shape[1])
         beta[[u, v, w]] = beta_u, beta_v, beta_w
 
-        print(beta_u, beta_v, beta_w)
-
         genetic_effect = self.gt_gwas @ beta
         environment_effect = np.random.normal(0, np.sqrt(1 - self.h2_true), (n_gwas, n_rep))
         phenotype = genetic_effect + environment_effect
@@ -124,13 +122,12 @@ class GWASandH2(object):
         self.z = b / b_se
 
     def h2(self, ld, min_eigval, max_num_eig):
-
         def hess_var(h2_local):
             h2_local_var = (n_gwas / (n_gwas - ld_rank)) ** 2 * \
-                      (2 * ld_rank * ((1 - h2_local) / n_gwas) + 4 * h2_local) * \
-                      ((1 - h2_local) / n_gwas)
+                           (2 * ld_rank * ((1 - h2_local) / n_gwas) + 4 * h2_local) * \
+                           ((1 - h2_local) / n_gwas)
             return h2_local_var.reshape(-1, 1)
-        
+
         def kggsee_var(z2_cor):
             vg_var = sigma_z2_outer * z2_cor / n_gwas ** 2
             h2_local_var = np.sum(ld2inv @ vg_var @ ld2inv, axis=(1, 2))
@@ -149,15 +146,15 @@ class GWASandH2(object):
         g_beta_k = (((self.z / n_gwas ** 0.5) @ ld_eigvec[:, :k]) ** 2 / ld_eigval[:k]).sum(axis=1)
         h2_hess = ((n_gwas * g_beta_k - k) / (n_gwas - k)).reshape(n_rep, 1)
         h2_hess_var = hess_var(h2_hess)
-        
+
         vg = (self.z ** 2 - 1) / (n_gwas + self.z ** 2 - 1)
         h2_kggsee = np.sum(ld2inv @ np.atleast_3d(vg), axis=1)
-        
+
         sigma_z2 = np.sqrt(4 * self.z ** 2 - 2 + np.array(0j))
         sigma_z2_outer = np.empty((n_rep, n_snp, n_snp))
         for a in range(n_rep):
             sigma_z2_outer[a] = np.real(np.outer(sigma_z2[a], sigma_z2[a]))
-        
+
         h2_kggsee_var1 = kggsee_var(ld_abs)
         h2_kggsee_var2 = kggsee_var(ld2inv)
         h2_kggsee_var3 = hess_var(h2_kggsee)
@@ -169,7 +166,6 @@ class GWASandH2(object):
 
 def analyze_one_partititon(partition_idx):
     refpanel_gt = refpanel.get_locus(partition_idx, args.n_snp)
-    np.savetxt(f'{args.out_pre}_{partition_idx}.refpanel.tsv', refpanel_gt, delimiter='\t', fmt='%d', comments='')
 
     logging.info(f'Simulating genotypes of partition {partition_idx} ...')
     simulation = Simulation(refpanel_gt, args.h2_true, args.n_ld_panel)
@@ -198,22 +194,22 @@ if __name__ == '__main__':
     parser.add_argument('--out-pre', type=str, required=True, help='Output file prefix')
     parser.add_argument('--partition-idx', type=str, default=None, help='Index of the target partition in the BED file'
                                                                         'If not specified, apply to all partitions.')
-    parser.add_argument('--n-snp', type=int, default=None, help='Number of SNPs to be simulated. '
-                                                                'If not specified, use all SNPs in the partition.')
-    parser.add_argument('--n-ld-panel', type=int, default=None, help='Sample size of LD panel to be simulated.'
-                                                                     'If not specified, the first GWAS sample '
-                                                                     'will also be used as the LD panel.')
+    parser.add_argument('--n-snp', type=float, default=None, help='Number of SNPs to be simulated. '
+                                                                  'If not specified, use all SNPs in the partition.')
+    parser.add_argument('--n-ld-panel', type=float, default=None, help='Sample size of LD panel to be simulated.'
+                                                                       'If not specified, the first GWAS sample '
+                                                                       'will also be used as the LD panel.')
     parser.add_argument('--h2-true', type=float, default=0, help='True heritability to be simulated')
     parser.add_argument('--maf-threshold', type=float, default=0.05, help='Minimum minor allele frequency')
     parser.add_argument('--min-eigval', type=float, default=1, help='Minimum eigenvalue')
-    parser.add_argument('--max-num-eig', type=int, default=50, help='Maximum number of eigenvalues')
-    parser.add_argument('--n-gwas', type=int, default=1000, help='Sample size of GWAS to be simulated')
-    parser.add_argument('--n-rep', type=int, default=100, help='The number of simulation repetitions '
-                                                               'for empirical SE calculation.')
+    parser.add_argument('--max-num-eig', type=float, default=50, help='Maximum number of eigenvalues')
+    parser.add_argument('--n-gwas', type=float, default=1000, help='Sample size of GWAS to be simulated')
+    parser.add_argument('--n-rep', type=float, default=100, help='The number of simulation repetitions '
+                                                                 'for empirical SE calculation.')
 
     args = parser.parse_args()
-    n_rep = args.n_rep
-    n_gwas = args.n_gwas
+    n_rep = int(args.n_rep)
+    n_gwas = int(args.n_gwas)
 
     logging.basicConfig(level=logging.DEBUG, format='[%(levelname)s] %(message)s')
     logging.info(f'Getting started at {time.strftime("%d %b %Y %H:%M:%S", time.localtime())}')
@@ -227,6 +223,6 @@ if __name__ == '__main__':
         try:
             analyze_one_partititon(i)
         except Exception as e:
-            print(e)
+            print(e, flush=True)
 
     logging.info(f'All partitions have been done at {time.strftime("%d %b %Y %H:%M:%S", time.localtime())}')
