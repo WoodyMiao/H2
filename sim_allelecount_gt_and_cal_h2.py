@@ -11,7 +11,16 @@ from rpy2.robjects.packages import importr
 
 
 class RefPanel(object):
+    """
+    This class handles the reference panel.
+    """
     def __init__(self, partition_bed, plink_pre):
+        """
+        This function loads the reference panel.
+
+        :param partition_bed: the bed file defines partitions to be simulated
+        :param plink_pre: the prefix of plink .ped and .map files of reference panel
+        """
         self.bed = np.loadtxt(partition_bed, dtype=int, skiprows=1)
         self.map = np.loadtxt(f'{plink_pre}.map', dtype=int, usecols=(0, 3))
 
@@ -22,6 +31,12 @@ class RefPanel(object):
         self.haplotype = np.concatenate((plink_ped[:, ::2], plink_ped[:, 1::2]))
 
     def get_locus(self, partition_idx, n_snp):
+        """
+        :param partition_idx: the line index of the partition to be simulated
+        :param n_snp: the number of SNPs to be simulated
+        :return: the genotypes of one partition
+        """
+
         in_block_idx = np.where(
             (self.map[:, 0] == self.bed[partition_idx, 0]) &
             (self.map[:, 1] >= self.bed[partition_idx, 1]) &
@@ -44,7 +59,17 @@ class RefPanel(object):
 
 
 class Simulation(object):
+    """
+    This class handles the simulated dataset.
+    """
     def __init__(self, gt_ref, h2_true, n_ld_panel):
+        """
+        This function loads the data and parameters for simulation.
+
+        :param gt_ref: genotypes of reference panel
+        :param h2_true: the true heritability to be simulated
+        :param n_ld_panel: the sample size for ld panel
+        """
 
         self.gt_gwas = self.simulate_allelecount_gt(gt_ref, n_gwas)
         if n_ld_panel is None:
@@ -58,6 +83,11 @@ class Simulation(object):
 
     @staticmethod
     def simulate_allelecount_gt(gt_ref, n_ind):
+        """
+        :param gt_ref: genotypes of reference panel
+        :param n_ind: number of diploid individuals to be simulated
+        :return: genotypes of simulated individuals
+        """
         importr('hapsim')
         haplodata = robjects.r('haplodata')
         m = robjects.r.matrix(robjects.IntVector(gt_ref.T.reshape(-1)), nrow=gt_ref.shape[0])
@@ -73,6 +103,9 @@ class Simulation(object):
         return gt_sim[0] + gt_sim[1]
 
     def simulate_beta_and_phenotype(self):
+        """
+        :return: true effect sizes, simulated phenotypes, observed heritability
+        """
         n_snp = self.ld.shape[0]
         u, v, w = int(n_snp * 0.25), int(n_snp * 0.5), int(n_snp * 0.75)
         u_var, v_var, w_var = self.gt_ld_panel[:, [u, v, w]].var(axis=0, ddof=1)
@@ -102,12 +135,22 @@ class Simulation(object):
 
 
 class GWASandH2(object):
+    """
+    This class performs association tests and calculates heritability.
+    """
     def __init__(self, geno, pheno):
+        """
+        :param geno: simulated genotypes
+        :param pheno: simulated phenotypes
+        """
         self.x = geno
         self.y = pheno
         self.z = None
 
     def gwas(self):
+        """
+        calculate the z-scores of association tests
+        """
         x = np.copy(self.x)
         y = np.copy(self.y)
         x -= x.mean(axis=0)
@@ -122,13 +165,19 @@ class GWASandH2(object):
         self.z = b / b_se
 
     def h2(self, ld, min_eigval, max_num_eig):
+        """
+        :param ld: the ld panel
+        :param min_eigval: the minimum eigen value for HESS
+        :param max_num_eig: the maximum number of eigen values for HESS
+        :return: heritability calculated by HESS and EHE
+        """
         def hess_var(h2_local):
             h2_local_var = (n_gwas / (n_gwas - ld_rank)) ** 2 * \
                            (2 * ld_rank * ((1 - h2_local) / n_gwas) + 4 * h2_local) * \
                            ((1 - h2_local) / n_gwas)
             return h2_local_var.reshape(-1, 1)
 
-        def kggsee_var(z2_cor):
+        def ehe_var(z2_cor):
             vg_var = sigma_z2_outer * z2_cor / n_gwas ** 2
             h2_local_var = np.sum(ld2inv @ vg_var @ ld2inv, axis=(1, 2))
             return h2_local_var.reshape(-1, 1)
@@ -140,7 +189,6 @@ class GWASandH2(object):
         ld_eigval = ld_eigval[idx]
         ld_eigvec = ld_eigvec[:, idx]
         k = min(max_num_eig, (ld_eigval > min_eigval).sum())
-        ld_abs = np.abs(ld)
         ld2inv = np.linalg.pinv(ld ** 2, hermitian=True)
 
         g_beta_k = (((self.z / n_gwas ** 0.5) @ ld_eigvec[:, :k]) ** 2 / ld_eigval[:k]).sum(axis=1)
@@ -148,23 +196,26 @@ class GWASandH2(object):
         h2_hess_var = hess_var(h2_hess)
 
         vg = (self.z ** 2 - 1) / (n_gwas + self.z ** 2 - 1)
-        h2_kggsee = np.sum(ld2inv @ np.atleast_3d(vg), axis=1)
+        h2_ehe = np.sum(ld2inv @ np.atleast_3d(vg), axis=1)
 
         sigma_z2 = np.sqrt(4 * self.z ** 2 - 2 + np.array(0j))
         sigma_z2_outer = np.empty((n_rep, n_snp, n_snp))
         for a in range(n_rep):
             sigma_z2_outer[a] = np.real(np.outer(sigma_z2[a], sigma_z2[a]))
 
-        h2_kggsee_var1 = kggsee_var(ld_abs)
-        h2_kggsee_var2 = kggsee_var(ld2inv)
-        h2_kggsee_var3 = hess_var(h2_kggsee)
+        h2_ehe_var = ehe_var(ld)
 
         return pd.DataFrame(
-            np.concatenate((h2_hess, h2_hess_var, h2_kggsee, h2_kggsee_var1, h2_kggsee_var2, h2_kggsee_var3), axis=1),
-            columns=['h2_hess', 'h2_hess_var', 'h2_kggsee', 'h2_kggsee_var1', 'h2_kggsee_var2', 'h2_kggsee_var3'])
+            np.concatenate((h2_hess, h2_hess_var, h2_ehe, h2_ehe_var), axis=1),
+            columns=['h2_hess', 'h2_hess_var', 'h2_ehe', 'h2_ehe_var'])
 
 
 def analyze_one_partititon(partition_idx):
+    """
+    This function conducts simulation and association tests, and calculates heritability for one partition.
+    :param partition_idx: the line index of the partition to be simulated
+    :return: heritability calculated by HESS and EHE
+    """
     refpanel_gt = refpanel.get_locus(partition_idx, args.n_snp)
 
     logging.info(f'Simulating genotypes of partition {partition_idx} ...')
@@ -182,13 +233,13 @@ def analyze_one_partititon(partition_idx):
     logging.info(f'Calculating the heritability of partition {partition_idx} ...')
     results = gwas_h2.h2(simulation.ld, args.min_eigval, args.max_num_eig)
     results['h2_observed'] = h2_observed
-    results.to_csv(f'{args.out_pre}_{partition_idx}.h2.tsv', sep='\t', index=False, float_format='%.3g')
     logging.info(f'Partition {partition_idx} has been done '
                  f'at {time.strftime("%d %b %Y %H:%M:%S", time.localtime())}.')
+    return results
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Simulate genotypes by HapSim and estimate h2 by HESS and KGGSEE')
+    parser = argparse.ArgumentParser(description='Simulate genotypes by HapSim and estimate h2 by HESS and EHE')
     parser.add_argument('--partition-bed', type=str, required=True, help='Genome partition in BED format')
     parser.add_argument('--plink-pre', type=str, required=True, help='Prefix of PLINK text file for reference panel')
     parser.add_argument('--out-pre', type=str, required=True, help='Output file prefix')
@@ -221,7 +272,8 @@ if __name__ == '__main__':
         indices = [int(a) for a in args.partition_idx.split(',')]
     for i in indices:
         try:
-            analyze_one_partititon(i)
+            df = analyze_one_partititon(i)
+            df.to_csv(f'{args.out_pre}_{i}.h2.tsv', sep='\t', index=False, float_format='%.3g')
         except Exception as e:
             print(e, flush=True)
 
