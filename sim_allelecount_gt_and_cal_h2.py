@@ -177,36 +177,28 @@ class GWASandH2(object):
                            ((1 - h2_local) / n_gwas)
             return h2_local_var.reshape(-1, 1)
 
-        def ehe_var(z2_cor):
-            vg_var = sigma_z2_outer * z2_cor / n_gwas ** 2
-            h2_local_var = np.sum(ld2inv @ vg_var @ ld2inv, axis=(1, 2))
-            return h2_local_var.reshape(-1, 1)
-
-        n_snp = ld.shape[0]
         ld_rank = np.linalg.matrix_rank(ld)
         ld_eigval, ld_eigvec = np.linalg.eigh(ld)
         idx = ld_eigval.argsort()[::-1]
         ld_eigval = ld_eigval[idx]
         ld_eigvec = ld_eigvec[:, idx]
         k = min(max_num_eig, (ld_eigval > min_eigval).sum())
-        ld2inv = np.linalg.pinv(ld ** 2, hermitian=True)
+        ld2 = ld ** 2
+        ld2inv = np.linalg.pinv(ld2, rcond=1e-6, hermitian=True)
 
         g_beta_k = (((self.z / n_gwas ** 0.5) @ ld_eigvec[:, :k]) ** 2 / ld_eigval[:k]).sum(axis=1)
         h2_hess = ((n_gwas * g_beta_k - k) / (n_gwas - k)).reshape(n_rep, 1)
         h2_hess_var = hess_var(h2_hess)
 
-        vg = (self.z ** 2 - 1) / (n_gwas + self.z ** 2 - 1)
-        h2_ehe = np.sum(ld2inv @ np.atleast_3d(vg), axis=1)
+        h2_ehe = np.sum(ld2inv @ np.atleast_3d(self.z ** 2 - 1), axis=1) / n_gwas
+        h2_ehe /= 1 + h2_ehe
 
-        sigma_z2 = np.sqrt(4 * self.z ** 2 - 2 + np.array(0j))
-        sigma_z2_outer = np.empty((n_rep, n_snp, n_snp))
-        for a in range(n_rep):
-            sigma_z2_outer[a] = np.real(np.outer(sigma_z2[a], sigma_z2[a]))
-
-        h2_ehe_var = ehe_var(ld)
+        z = np.atleast_3d(self.z)
+        z_var = 4 * z @ np.swapaxes(z, 1, 2) * ld - 2 * ld2
+        h2_ehe_var = np.sum(ld2inv @ z_var @ ld2inv, axis=(1, 2)) / n_gwas ** 2
 
         return pd.DataFrame(
-            np.concatenate((h2_hess, h2_hess_var, h2_ehe, h2_ehe_var), axis=1),
+            np.concatenate((h2_hess, h2_hess_var, h2_ehe, h2_ehe_var.reshape(-1, 1)), axis=1),
             columns=['h2_hess', 'h2_hess_var', 'h2_ehe', 'h2_ehe_var'])
 
 

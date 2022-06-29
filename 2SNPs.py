@@ -6,9 +6,9 @@ from scipy.stats import norm
 n_snp = 2
 n_rep = 1000
 n_gwas = 10000
-b_true = np.array([0.1, -0.01])
-h2_set = 0.01
-mvn_cov = np.array([[1, 0.7], [0.7, 1]])
+b_true = np.array([0.1, 0.01])
+h2_set = 0.1
+mvn_cov = np.array([[1, -0.9], [-0.9, 1]])
 maf = np.array([0.5, 0.5])
 
 gt_haplotype = np.random.multivariate_normal(np.zeros(n_snp), mvn_cov, (2, n_gwas, n_rep))
@@ -73,15 +73,10 @@ b_true_sign = np.sign(b_true)
 b_true_sign_outer = np.outer(b_true_sign, b_true_sign)
 h2_ehe = np.sum(ld2_inv @ np.atleast_3d((z ** 2 - 1) / n_gwas), axis=1)
 h2_ehe /= 1 + h2_ehe
-h2_ehe_sd1 = np.sqrt(np.sum(ld2_inv @ (sd_z2_outer * ld / n_gwas ** 2) @ ld2_inv, axis=(1, 2)))
-h2_ehe_sd2 = np.sqrt(np.sum(ld2_inv @ (sd_z2_outer * ld2 / n_gwas ** 2) @ ld2_inv, axis=(1, 2)))
-h2_ehe_sd3 = np.sqrt(np.sum(ld2_inv @ (sd_z2_outer * ld * b_true_sign_outer / n_gwas ** 2) @ ld2_inv, axis=(1, 2)))
-h2_ehe_sd4 = np.sqrt(np.sum(ld2_inv @ (sd_z2_outer * ld * b_gwas_sign_outer / n_gwas ** 2) @ ld2_inv, axis=(1, 2)))
+z = np.atleast_3d(z)
+z_var = 4 * z @ np.swapaxes(z, 1, 2) * ld - 2 * ld2
+h2_ehe_sd = np.sqrt(np.sum(ld2_inv @ z_var @ ld2_inv, axis=(1, 2)) / n_gwas ** 2)
 h2_ehe_deviation = (h2_ehe - h2_observed) / h2_observed * 100
 print('h2_ehe_deviation', np.percentile(h2_ehe_deviation, [0, 50, 100]))
 
-print(h2_ehe.std())
-print(h2_ehe_sd1.mean())
-print(h2_ehe_sd2.mean())
-print(h2_ehe_sd3.mean())
-print(h2_ehe_sd4.mean())
+print(h2_ehe.std(), h2_ehe_sd.mean())
